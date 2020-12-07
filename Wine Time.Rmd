@@ -1,0 +1,801 @@
+---
+title: "wine time"
+author: "Sarah Little"
+date: "11/8/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+#Intro
+In this presentation, we will be studying a data set comprised of wine reviews scraped from the Wine Enthusiast Magazine from November of 2017. The data can be found on Kaggle (https://www.kaggle.com/zynicide/wine-reviews) . 
+The dataset consists of 130,000 wine reviews written by critics with information on price, grape variety, place of origin, points and several other variables. 
+
+The points score ranges from 80-100 and are classified into 
+6 categories according to the magazine. The magazine 
+says it does not post reviews for wine 
+scoring below 80.
+
+```{r include=FALSE}
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Stat 627 Fall")
+wine_review <- read.csv("winemag-data-130k-v2.csv")
+```
+
+
+```{r, include=FALSE}
+library(tidyverse)
+library(caret)
+library(tidytext)
+library(dplyr)
+```
+
+**CLEANING THE DATA**
+
+#Step 1: Show a snapshot of some of the variables 
+
+```{r, echo=FALSE}
+wine_review %>%head() 
+wine_review %>%
+  summary()
+```
+In the wine titles, we can see that the year the wine was made, or the vintage, is usually included. Vintage is an important factor when it comes to evaluating wines. Therefore we will look into extracting the vintage year data from the wine titles and adding the new variable `vintage` to the dataset. 
+
+The wine title pattern goes as follows: Winery name first, then the year the wine is made.We notice some of the winery names include years also (likely the year of their founding), so we ensure that we exclude years contained in winery names:
+
+#Step 2: Add vintage as a new variable
+```{r, warning=FALSE}
+# Extract vintage year information from wine titles
+#we get this formula because the winerary name comes first, then the year the wine is made, so we want the date to start 2 characters after the winary variable and end when the year ends. 
+wine_review <- wine_review %>% mutate(vintage = as.numeric(substr(title, str_length(winery)+2,str_length(winery)+5)))
+wine_review %>% 
+  select(title, vintage) %>% 
+  head()
+```
+
+#Step 3: Remove any Nas
+
+The next step in cleaning the data is making sure any Nas that will affect the analysis are taken care of, either by removing the variable entirely or ignoring it from our analysis. The following code will look at the number of NA values by variable and summarise them in a chart. 
+
+```{r, echo=FALSE}
+data.frame(Variable = wine_review %>% names() %>% .[. != "X"],
+           Num_NA = c(wine_review %>% filter(is.na(country) | country == "") %>% nrow(),
+                           wine_review %>% filter(is.na(description) | description == "") %>% nrow(),
+                           wine_review%>% filter(is.na(designation) | designation == "") %>% nrow(),
+                           wine_review %>% filter(is.na(points) | points == "") %>% nrow(),
+                           wine_review %>% filter(is.na(price) | price == "") %>% nrow(),
+                           wine_review %>% filter(is.na(province) | province == "") %>% nrow(),
+                           wine_review %>% filter(is.na(region_1) | region_1 == "") %>% nrow(),
+                           wine_review %>% filter(is.na(region_2) | region_2 == "") %>% nrow(),
+                           wine_review %>% filter(is.na(taster_name) | taster_name == "") %>% nrow(),
+                           wine_review %>% filter(is.na(taster_twitter_handle) | taster_twitter_handle == "") %>% nrow(),
+                           wine_review %>% filter(is.na(title) | title == "") %>% nrow(),
+                           wine_review %>% filter(is.na(variety) | variety == "") %>% nrow(),
+                           wine_review %>% filter(is.na(winery) | winery == "") %>% nrow(),
+                           wine_review %>% filter(is.na(vintage) | vintage == "") %>% nrow())) 
+```
+
+After looking at the table above, we can see that over 79,000 observations have missing data for `region_2` and over 21,000 have missing data for `region_1`. The variables `taster_twitter_handle`, `taster_name` and `designation` also have a significant amount of observations missing. Given the other variables available to us as well as the amount of observations missing., we feel that is is appropriate fir us to ignore the variables listed above. 
+Therefore, we only care about ensuring our dataset has non blank entries for `country`, `price`, `province`, `variety` and our new variable `vintage`. 
+
+
+```{r}
+# Filter out NA or blank entries for the relevant variables in our data set
+wine_clean <- wine_review %>% 
+  filter(!is.na(price) & price != "" &
+                                !is.na(country) & country != "" &
+                                !is.na(province) & province != "" &
+                                !is.na(variety) & variety != "" &
+                                !is.na(vintage) & vintage != "")
+wine_clean %>% 
+  nrow() # Count the remaining entries in the data set
+```
+Our dataset has now dropped from 129,971 observations to 116,761 observations after removing necessary blank spaces. 
+
+
+```{r, echo=FALSE}
+#double check one last time that we removed the NAs
+data.frame(Variable = wine_clean %>% names() %>% .[. != "X"],
+           Num_NA = c(wine_clean %>% filter(is.na(country) | country == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(description) | description == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(designation) | designation == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(points) | points == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(price) | price == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(province) | province == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(region_1) | region_1 == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(region_2) | region_2 == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(taster_name) | taster_name == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(taster_twitter_handle) | taster_twitter_handle == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(title) | title == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(variety) | variety == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(winery) | winery == "") %>% nrow(),
+                           wine_clean %>% filter(is.na(vintage) | vintage == "") %>% nrow()))
+```
+
+Next, we check to see the number of distinct entries for the relevant variables to be used:
+
+```{r, echo=FALSE}
+#this code checks for unqiue entries
+data.frame(Count = t(wine_clean %>% summarize(
+  "Unique Countries" = n_distinct(country),
+  "Unique Descriptions" = n_distinct(description),
+  "Unique Points" = n_distinct(points), #this should be 22 if every point was used but is only 21 so one point was not given at all 
+  "Unique Prices" = n_distinct(price),
+  "Unique Provinces" = n_distinct(province),
+  "Unique Varieties" = n_distinct(variety),
+  "Unique Vintages" = n_distinct(vintage))))
+
+#from this we can see that we are going to have to deal with anhigh amount of factor levels for a couple of the variables. 
+```
+
+
+
+#Step 4: Adjusting the points variable
+
+First, the computing power we are working with will not be able to accomidate a dataset as large as we have right now. We decide to take a random sample of 10% of the dataset to help run our machine learning algorithms in a more managble amount of time. 
+
+Next, we are also going to add one more variable called `points_bracket`. It is important to make sort of "buckets" for the points variables to live in because the difference between a score such as an 89 might not mean that much to the models, but it is the difference of 'Very Good" and 'Excellent' according to the wine reviewers. The table with the broken down brackets is shown below.
+98-100 --> Classic
+94-97 --> Superb
+90-93 --> Excellent
+87-89 --> Very Good
+83-86 --> Good
+80-82 --> Acceptable
+
+We then construct a training set containing 75% of the entries and a testing set containing approximately 25%. It is important to rembember to discard entries with provinces and grape varieties that do not appear in the training set, since these both have very large factor levels and the models wont run if all of the factor levels do not match up. We choose an 75:25 split in order to have a substantial proportion of the data entries available in our training set to train the models:
+
+```{r, warning=FALSE}
+library(cleandata)
+# Set sample seed to 1 for replicability
+set.seed(1)
+# We filter the data set to only include the columns that will be relevant for our study, 
+# then sample 10% of the cleaned data set entries and add a category variable with the score brackets
+wine_clean <- wine_clean %>% 
+  select(-X, -designation, -region_1, -region_2,
+                              -taster_name, -taster_twitter_handle, -title, -winery) %>%
+  sample_n(11676) %>%
+  
+  #now point brackets
+  mutate(point_bracket = as.factor(case_when(points > 97 ~ "Classic",
+                              points > 93 ~ "Superb",   
+                              points > 89 ~ "Excellent",
+                              points > 86 ~ "Very Good",
+                              points > 82 ~ "Good",
+                              points >= 80 ~ "Acceptable")))
+# Set sample seed to 1 for replicability
+set.seed(1)
+
+wine_clean %>% 
+  select(-description) %>%
+  head() %>% 
+  knitr::kable() #knitr function makes the tables look good in the knitted version
+```
+
+```{r}
+#Create the training and testing sets 
+# We create a test index using 25% of the entries in the dataset
+library(caTools)
+set.seed(1)
+wine_sample <- sample.split(wine_clean, SplitRatio = 0.75)
+#create train 
+wine_train <- subset(wine_clean, wine_sample == TRUE) # creates a training dataset named train1 with rows which are marked as TRUE
+#create test 
+wine_test <- subset(wine_clean, wine_sample == FALSE)
+
+# Make sure that provinces and varieties in the test set are also in the training set
+wine_test <- wine_test %>% 
+  semi_join(wine_train, by = "province") %>%
+  semi_join(wine_train, by = "variety")
+# Remove unused factors for the variety and province variables in the training and test sets
+wine_train <- wine_train %>% 
+  mutate(variety = droplevels(variety), province = droplevels(province))
+wine_test <- wine_test %>% 
+  mutate(variety = droplevels(variety),province = droplevels(province))
+# Match the factor levels in the training and test sets to prepare for use in our models
+levels(wine_test$variety) <- levels(wine_train$variety)
+levels(wine_test$province) <- levels(wine_train$province)
+```
+
+```{r, echo=FALSE}
+data.frame(Data_set = c("wine_train", "wine_test"),
+           No_entries = c(nrow(wine_train), nrow(wine_test))) %>% knitr::kable()
+```
+
+We see that the training set and test set contain data entries in approximately an 75:25 proportion.
+
+```{r include=FALSE}
+#delete any unused datasets now to save vector memory space 
+rm(wine_review)
+```
+
+#Correlations
+
+Next we need to be sure to check the correlations of any of our remaining variables before we decide what is going to go into the algortithms. We chose to show a couple of chi squared tests, but also plotted all the correlations on the variables below
+
+```{r}
+chisq.test(wine_train$province, wine_train$variety, correct = FALSE)
+chisq.test(wine_train$province, wine_train$country, correct = FALSE)
+chisq.test(wine_train$price, wine_train$point_bracket, correct = FALSE)
+```
+
+```{r}
+#plot the correlations
+library(GoodmanKruskal)
+varset1<- c("province","variety","vintage","price","point_bracket", "country", "points")
+mushroomFrame1<- subset(wine_train, select = varset1)
+GKmatrix1<- GKtauDataframe(mushroomFrame1)
+plot(GKmatrix1, corrColors = "blue")
+```
+
+This proves country and province are exactly correlated and we should only continue with 1 in our model.
+
+
+#Step 5: Visualizing the data 
+
+Now we begin visualizing the data in our training set to further understand the links between the different variables and wine ratings.
+
+First, we will start with some sentiment analysis of the descriptions. If this variable seems to have a strong link to the points scored by the wine, then it should be defintly included in our models. We utilize the  `bing` lexicon, which classifies words as either positive or negative.
+
+```{r, warning=FALSE}
+nrc <- get_sentiments("nrc")#nrc sentiments
+set.seed(1)# Set seed for replicability
+wine_nrc <- wine_train %>% 
+  mutate(description = as.character(description)) %>% # Convert descriptions from factors
+  sample_n(20) %>%# Sample 20 rows
+  unnest_tokens(word, description) %>% # Tokenize words
+  filter(!word %in% stop_words$word &# Filter out stop words
+           !str_detect(word, "^\\d+$")) %>%# Filter out numbers
+  inner_join(nrc, by="word")# Join the nrc sentiments by word
+wine_nrc 
+```
+By just breifly glancing at the sample of 20 entries, it does not seem that the description variable will be offering us any useful information when trying to predict the wine score. A lot of the words the bing lexicon sees as negative, should not be considered negative in the wine industry. However, we will look further before ruling anything out.
+
+If we group sentiments by review and calculate the percentage of positive words for each entry, we see that all 20 entries now have some sentiment value attached to them:
+
+```{r}
+# Group the word sentiment scores by review and calculate the postive word percentage
+wine_nrc %>% unite(review, province, vintage, variety, sep = " ") %>%
+  group_by(review) %>%
+  summarise(points = points[1], 
+            Positive_percentage = sum(sentiment == "positive")*100/n())
+```
+This table gives us a brief snapshot of another reason why it does not look like the description will give us any analytic value. Some of the wines that scored in the lower bracket are shown to have a 100% positive sentiment analysis, when we would expect them to have at least some negative values. 
+
+We look below at a a plot of sentiment, faceted over the points offered for a visual. 
+
+```{r}
+#graph the sentiment
+wine_nrc %>%
+  ggplot(aes(fill = sentiment)) +geom_bar(mapping = aes(x = factor(sentiment),position = "fill")) +facet_wrap(~points) + labs( title = "Sentiment Analysis by Points" , x = "Sentiment", y = "Count") +
+  theme(axis.text.x=element_text(angle = 90, hjust = .5, vjust = 0.5),
+        axis.ticks.x=element_blank(),
+        panel.grid.major.x=element_blank())
+```
+We can see from the plot that sentiment of the description has no real pattern or effect on the points given. It seems that the description is more of a description than an oppinionist review of the wine. 
+
+
+Next, we look into the distribution of the wine review scores and plot them on a histogram. 
+
+```{r, warning=FALSE, echo=FALSE}
+#graph the review scores
+theme_set(theme_classic())
+wine_train %>% ggplot(aes(points)) +
+  geom_histogram(breaks = seq(80, 100, 1), col = "black", fill = "pink") + labs( title = "Distribution of Points", x = "Points", y = "Count")
+```
+
+```{r, echo=FALSE}
+options(digits = 3)
+wine_train %>% summarise("Mean points" = mean(points),
+                        "SD points" = sd(points),
+                        "Min points" = min(points),
+                        "Max points" = max(points))
+```
+
+We can see that the distribution of points somewhat resembles a normal distribution, albeit with two peaks, with a mean of 88.4 and standard deviation of 3.08.
+
+
+Next, we look into points by the score bracket.
+
+```{r, echo=FALSE, warning=FALSE}
+
+wine_train %>% ggplot(aes(x=factor(point_bracket, level = c("Classic", "Superb", "Excellent", "Very Good", "Good", "Acceptable")))) +
+  geom_histogram(stat = "count", col = "black", fill = "pink") + labs(title = "Distribution of the Points Bracket", x = "Points Bracket", y ="Count")
+
+```
+
+Plotting a histogram by points score category shows a similar distribution.
+
+Now looking at wine prices, we plot the distribution of wine prices in our data set. We have to adjust by log scale because there are a few very highly priced bottles of wine that are very far away from the average prices. 
+
+```{r, warning=FALSE, echo=FALSE}
+wine_train %>% ggplot(aes(price)) +
+  geom_histogram(bins = 50, col = "black", fill = "pink") +
+  scale_x_log10() + labs(title = "Price Distribution", x= "Price (log scale)", y = "Count")
+
+```
+
+```{r, echo=FALSE}
+wine_train %>% summarise("Mean price" = mean(price),
+                        "SD price" = sd(price),
+                        "Min price" = min(price),
+                        "Max price" = max(price))
+```
+
+We see that there is a very large range in wine prices, from \$5 to $3,300 per bottle in our training set.But the mean price is around \$35, so it seems that there are only a couple bottles of wine on the higher end.
+
+
+Looking further into price, we will examine the relationship between price and points scored.
+
+```{r, echo=FALSE}
+library(ggalt)
+
+price_select <- wine_train[wine_train$price >2900 & wine_train$points < 89,]
+
+wine_train %>% group_by(vintage,point_bracket) %>% 
+ summarise(price = mean(price)) %>%
+  ggplot(aes(price, vintage)) +
+  geom_jitter(aes(color= point_bracket)) +
+  geom_smooth(method = "lm", se = F) +
+  #scale_x_log10() + geom_encircle(aes(price, points),data = price_select, color = "red", size =2) +
+labs(title = "Average Price by Average Vintage", x = "Average Price", y = "Average Vintage")
+```
+
+We see from the plot above that there is a strong positive trend between wine price and average points. However, from the graph and the summary below, we see for the wine priced at the maximum $3,300 price is actually below the average of all ratings (88.4):
+
+```{r, echo=FALSE}
+wine_train %>% group_by(price) %>%
+  filter(price == 3300) %>% summarize("Average points" = mean(points), count = n()) 
+```
+
+Next, we look at the distribution of vintage years:
+
+```{r, echo=FALSE}
+wine_train %>% ggplot(aes(vintage)) +
+  geom_histogram(binwidth = 3, col = "black", fill = "pink") +
+  scale_x_continuous(breaks = seq (1930, 2017, 30)) + labs(title = "Vintage Distrabution", x = "Year", y = "Count")
+```
+
+```{r, echo=FALSE}
+wine_train %>% summarise("Mean year" = mean(vintage),
+                        "SD year" = sd(vintage),
+                        "Min year" = min(vintage),
+                        "Max year" = max(vintage))
+```
+
+We see that the vintages for wines in our training set are heavily clustered in more recent years, with an average vintage of 2010, but with an earliest vintage of 1934.
+
+We look at a plot of the relationship of vintage against points below:
+
+```{r, echo=FALSE}
+
+wine_train %>% group_by(point_bracket, vintage) %>%
+  filter(vintage >= 1975) %>% #focus on where the large amount of data is 
+  summarise(price = mean(price)) %>%
+  ggplot(aes(vintage,price)) +
+  geom_point(aes(color = point_bracket)) +labs(title = "Price Distribution", x= "year", y = "price")
+
+
+
+wine_train %>% group_by(vintage) %>% 
+  summarise(points = mean(points)) %>%
+  ggplot(aes(vintage, points)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_continuous(breaks = seq (1930, 2017, 20)) + labs(title = "Vintage by Points", x = "Year", y = "Average Points")
+```
+There is a very strong negative trend for wine points versus vintage, that is the newer wines score way lower than the older wines did. However, we can also see that the newer wines have way more data points available than the older vintages, so this mught be one reason for the affect we are seeing. 
+
+We will replot the wines for vintages after 1990:
+
+```{r, echo=FALSE}
+wine_train %>% group_by(vintage) %>% 
+  filter(vintage > 1990) %>%
+  summarise(points = mean(points)) %>%
+  ggplot(aes(vintage, points)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_continuous(breaks = seq (1990, 2017, 5)) + labs( title = "Vintage (post 1990) by Points", x = "Year", y = "Average Points")
+```
+
+The steep negative trend we saw before is not as noticable without the older vintages.
+
+Now, we examine the link between the province of wine origin and points. First, since we have over 230 provinces, we need to subset that group to make the visualization a little better. We will start with subsetting by number of reviews given by region and only include regions that recieved over 50 reviews to be plotted
+
+```{r, warning=FALSE, echo=FALSE}
+wine_train %>% group_by(province) %>%
+  summarize(count = n()) %>%
+  mutate(province = reorder(province, desc(count))) %>%
+  filter(count >= 50) %>%
+  ggplot(aes(province, count)) +
+  geom_histogram(stat = "identity", col = "black", fill = "pink") + labs( title = "Wine Province by Review", x = "Province", y = "Count"  ) +
+  theme(axis.text.x=element_text(angle = 90, hjust = .5, vjust = 0.5),
+        axis.ticks.x=element_blank(),
+        panel.grid.major.x=element_blank())
+```
+Frpm the graph, we can see that Calirfonia has an overwhelming amount of reviews compared to the other provinces. In terms of countries however, France and Italy are featured far more often than the other countries, even if the regions did not recueve nearly as many reviews as just California. 
+
+
+```{r, echo=FALSE}
+wine_train %>% group_by(province) %>%
+  summarize(Mean_points = mean(points), SD_points = sd(points), Count = n()) %>%
+  arrange(desc(Mean_points)) %>%
+  top_n(10, Mean_points)
+wine_train %>% group_by(province) %>%
+  summarize(Mean_points = mean(points), SD_points = sd(points), Count = n()) %>%
+  arrange(Mean_points) %>%
+  top_n(-10, Mean_points) 
+```
+Based on this preliminary analysis, wine provinces also look useful in training our algorithms. 
+
+
+We now look at wine grape variety in a similar manner, plotting review counts and average ratings for varieties with more than 50 reviews (given the overwhelming amount of data)
+
+```{r, warning=FALSE, echo=FALSE}
+wine_train %>% group_by(variety) %>%
+  summarize(count = n()) %>%
+  mutate(variety = reorder(variety, desc(count))) %>%
+  filter(count >= 50) %>%
+  ggplot(aes(variety, count)) +
+  geom_histogram(stat = "identity", col = "black", fill = "pink") + labs(title = "Wine Varieties", x = "Grape Variety", y = "Count") +
+  theme(axis.text.x=element_text(angle = 90, hjust = 1, vjust = 0.5),
+        axis.ticks.x=element_blank(),
+        panel.grid.major.x=element_blank())
+```
+
+We see that the most popular grape varieties for the reviewers to review are Pinot Noir, Chardonnay, and Cabernet Sauvignon, along with Red Blend, which have average ratings between 88 and 89.5 - around the overall average. The highest average points can be seen in the last 3 grape varieties, Shiraz, Grunwe- Veltilner and Nebbiolo, although these also have the number of reviews on the lower scale. Shiraz alo has one of the longer ranges of average points. 
+
+```{r, echo=FALSE}
+wine_train %>% group_by(variety) %>%
+  summarize(Mean_points = mean(points), SD_points = sd(points), Count = n()) %>%
+  arrange(desc(Mean_points)) %>%
+  top_n(10, Mean_points) 
+wine_train %>% group_by(variety) %>%
+  summarize(Mean_points = mean(points), SD_points = sd(points), Count = n()) %>%
+  arrange(Mean_points) %>%
+  top_n(-10, Mean_points) 
+```
+
+Wine grape variety again in general looks to provide useful information for use in our algorithms.
+
+
+Preliminary analysis conclusion: The wine descriptions will not provide much use in this projects machine learning purpose for predicting wine quality. Therefore, we remove the description as well as the points variables because we are fovusing on the points brackets instead. The variables we do decide to procede further with are `price`, `vintage`, `variety` and `province`.
+
+
+```{r}
+# Remove unrequired variables from training and testing sets and unused objects
+wine_train <- wine_train %>% select(-description, -points, -country)
+wine_test <- wine_test %>% select(-description, -points, -country)
+#definitly remove unused stuff
+rm(bing, wine_bing,wine_clean)
+```
+
+
+#Step 6: Machine Learning Algorithms
+
+Since some of our variables have a lot of factor levels, we need to create dummy variables to help some of the more costly algorithms run faster. We do this by creating variables that are either 1 or 0 for each factor level.
+
+```{r, warning=FALSE}
+# Set our training set outcomes in a separate vector
+y_train <- wine_train$point_bracket
+# Create a dummy variable matrix of predictors for factor variable levels
+dummyvars <- dummyVars( ~ price + vintage + variety + province, data = wine_train)
+train_dummyvars <- predict(dummyvars, newdata = wine_train)
+dim(train_dummyvars)
+```
+
+```{r, echo=FALSE}
+#just mske sure that the numbers still match
+data.frame(Count = t(wine_train %>% summarize(
+  "wine_train distinct provinces" = n_distinct(province),
+  "wine_train distinct varieties" = n_distinct(variety)))) %>%
+  knitr::kable()
+```
+
+
+Since we are trying to make predicitions on a discrete variable, with 6 classes, we will be looking into classification machine learning methods. For most of the methods, we will be using the `train()` function in the `caret` package. 
+
+Since we are unsure about if our classes have distinctly different covariances, but it does seem that our data follows a normal distribution, as we saw in the plots above, we will start with LDA and QDA methods and compare them for accuracy. LDA and QDA are preffered over logistical regression because we have more than 2 classes. However, both these methods are poor at handling categorical predictor variables, so we focus on price and vintage only. Also, since o is small ( p = 2) because of the restriction to have continous variables, we should expect both methods to perform well if p also has equal covariances.
+
+**QDA MODEL**
+
+First the QDA Model. The model fails to run including the `variety` and `province` variables due to insufficient individual factor level datapoints available in our sample, so we utilize only the `price` and `vintage` variables. Both these variables look fairly normal, with one outlier in vintage. 
+
+```{r, warning=FALSE}
+# Train QDA model on train_set with bootrapping resampling 
+set.seed(1)
+control <- trainControl(method = "cv", number = 100) #bootstrap and 100 resamples
+train_qda <- train(point_bracket ~ price + vintage,
+                  data = wine_train,
+                  method = "qda",
+                  trControl = control)
+```
+
+```{r, echo=FALSE}
+train_qda
+```
+We see the accuracy is only .427 
+
+
+```{r, echo=FALSE, warning=FALSE}
+model_results <- data_frame(Model="QDA",
+                           Accuracy = max(train_qda$results$Accuracy))
+model_results %>% knitr::kable()
+```
+
+
+**LDA Model**
+
+We get the same warning running the LDA model with discrete variables, so we only include price and vintage.
+
+```{r, warning=FALSE}
+# Train QDA model on train_set with bootstraping resampling (same as the parameters for lda)
+set.seed(1)
+train_lda <- train(point_bracket ~ price + vintage,
+                  data = wine_train,
+                  method = "lda", 
+                  trControl = control)
+```
+
+```{r, echo=FALSE}
+train_lda
+```
+The accuracy is slightly better at .435
+
+
+```{r, echo=FALSE, warning=FALSE}
+model_results <- bind_rows(model_results,
+                           data_frame(Model="LDA",
+                                      Accuracy = max(train_lda$results$Accuracy)))
+model_results %>% knitr::kable()
+```
+
+
+We see †hat LDA accuracy is slightly higher than QDA. This could indicate that the assumption of common covariance is suitable for this data set.
+
+However,LDA is a much less flexible classifier than QDA, and so has substantially lower variance. This can potentially lead to improved prediction performance. But there is a trade-off: if LDA’s assumption that the the predictor variable share a common variance across each Y response class is badly off, then LDA can suffer from high bias. 
+
+This is why we could have seen a slight improvement with LDA over QDA. Still, both of these prediction accuracies are fairly low, so we will move onto other, stronger classificantion methods. 
+
+
+Since we only focused on 2 predictors out of the 4 available, the other classification models we chose will be better at handling categorical predictors and hopefully have higher accuracy ratees. 
+
+Therefore we move onto the classification tree method. 
+
+
+**Classification tree**
+
+The classification and regression tree methods were found while researchers were seeking to solve the problems of other methods such as not handling large data well, too many iterations(not knowing when to stop) and not being able to process categorical predictors (AID,ID3 and CHAID for example.)
+
+ We run the `rpart` algorithm , which by default performs a 25-fold cross validation. We can use all the predictors for the model.  We set the algorithm to use the tuning parameter, complexity parameter to the 0.05 level, that is if the cost of adding another variable to the decision tree from the current node is above the value of cp, then tree building does not continue. 
+
+```{r}
+# Train a classification tree model on train_set
+#change to kfold cross validation with 25 resamples 
+set.seed(1)
+train_class <- train(point_bracket ~ price + province + variety + vintage,
+                     method = "rpart", #this will automatically prune the trees
+                     data = wine_train,
+                     trControl = trainControl(method = "cv"),
+                     tuneGrid = data.frame(cp = seq(0.0, 0.05, len = 20))) #cp parmeter 
+train_class
+```
+
+The final model uses the lowest cp and the most accuracy. 
+
+
+```{r, echo=FALSE}
+#plot the model
+library(rpart.plot)
+library(ggplot2)
+prp(train_class$finalModel, box.palette = "Reds", tweak = 1.2)
+ggplot(train_class, highlight = TRUE)
+```
+
+Price >= 27 is the first split. 
+
+Examining the optimal tree structure, we find that only 4/6 points categories Excellent, Superb, Good and Very Good an are being assigned and `price` is the only variable being used to determine the category.
+
+
+```{r}
+train_class$results %>% filter(Accuracy == max(Accuracy))
+```
+
+We see that utilizing the optimal complexity parameter for our model, the accuracy is only .504
+
+
+```{r}
+#Another visual representation of the classification tree
+suppressMessages(library(rattle))
+fancyRpartPlot(train_class$finalModel)
+```
+
+Next, we can look at the order of importance of the predictor variables in the model. However it should come at no suprise that price is the first and at 100% importance since it was the only predictor used in the model. Perhaps if we lowered the complexity parameter we would see other variables used in the model. 
+```{r, echo=FALSE, warning=FALSE}
+varImp(train_class)
+```
+
+Examining the variable importance confirms that `price` is overwhelmingly the most important variable in this model.
+
+```{r}
+model_results <- bind_rows(model_results,
+                           data_frame(Model="Classification Tree",
+                                      Accuracy = max(train_class$results$Accuracy)))
+model_results %>% knitr::kable()
+```
+
+
+**Random Forest**
+
+Next, we run a random forest supervised machine learning algorithm. The forest it builds is a combination of decision trees through bagging methods. This means that the combination of learning models hopefully increases overall results 
+
+Random forest adds additional randomness to the model, while growing the trees. Instead of searching for the most important feature while splitting a node, it searches for the best feature among a random subset of features. This results in a wide diversity that generally results in a better model.
+
+Even though this multiple decision process takes longer than the classification tree, it often results in a more accuracte model.
+
+Rborsit handles large n with a smaller p. Unforutuatly, due to cost and time restraints, we will limit the algorithm to a 3-fold cross validation, reduce the number of trees to 50, and take a random subset of 500 observations when constructing each tree in order to save on computation time. 
+
+We run the algorithm with the number of predictors tuning parameter `predFixed` over a range of 20 to 80, and minimum node sizes of 2, 6, and 10 under the `minNode` parameter:
+
+```{r, warning=FALSE}
+set.seed(1)
+# Set to 3-fold cross validation and our tuning parameter values to test
+trcontrol <- trainControl(method="cv", number = 3) #kfold cross validation but limit to 3 to save time 
+grid <- expand.grid(minNode = c(2,6,10) , predFixed = seq(20,80,10))
+# Train random forest model on train_set with 50 trees sampling 500 rows each
+
+
+train_rf <- train(point_bracket ~ price + variety + province + vintage,
+                     method = "Rborist",
+                     data = wine_train,
+                  tuneGrid = grid,
+                     nTree = 50, #usually is 500 but we restrict to 50 to save on computation time
+                     trControl = trcontrol,
+                     nSamp = 500)
+```
+
+
+```{r, echo=FALSE}
+#look at the model
+train_rf
+```
+accuracy of .526
+```{r, echo=FALSE,warning=FALSE}
+varImp(train_rf)
+plot(train_rf, highlight = TRUE)
+```
+
+Looking at the variable importance for the random forest model, we again see that price is the most important variable, followed by vintage. We se that the highest accuracy is achieved with a minNode size = 6 and predFix = 40. This is our highest accuracy yet at .526
+
+```{r, echo=FALSE, warning=FALSE}
+model_results <- bind_rows(model_results,
+                           data_frame(Model="Random Forest",
+                                      Accuracy = max(train_rf$results$Accuracy)))
+model_results %>% knitr::kable()
+```
+
+This is a classic example where collective decision making outperformed a single decision-making process.
+
+
+**SVM Models**
+
+Lastly, we will try the supported vector machine method. 
+
+First we visualize the 2 numeric predictors we have because they seem to be the most important by far compared to the other predictors. 
+
+```{r}
+#visulaize the predictors
+wine_train %>% group_by(point_bracket, vintage) %>%
+  filter(vintage >= 1975) %>% #focus on where the large amount of data is 
+  summarise(price = mean(price)) %>%
+  ggplot(aes(vintage,price)) +
+  geom_point(aes(color = point_bracket)) +labs(title = "Price Distribution", x= "year", y = "price")
+
+```
+As we can see from the graph, we clearly cannot seperate the classes by a hyperplane, so we go with the svm method. 
+
+
+First we try to find the optimal kernal. We look at costs .1,1 and 10 to save time and only focus on the radial kernal (since the data does not appear linear at all we need to go with a non linear method) to also save computational time. To save time, we change the k fold cross validation to 5 instead of the automatic 10.
+```{r}
+# install.packages('e1071')
+set.seed(1)
+library(e1071)
+d = wine_train[c(1,4:5)] #data set that only comprises of the variables we need for training
+d2 = wine_test[c(1,4:5)] #subset of the testing dataset
+tc <- tune.control(cross =5)
+Stuned = tune( svm, point_bracket ~ price + vintage, data=d, ranges=list(cost=10^seq(-1,1)),
+kernel="radial", tunecontrol = tc)
+summary(Stuned)
+```
+
+#other methods that didnt work (dont run)
+```{r eval=FALSE, include=FALSE}
+Stuned = tune( svm, point_bracket ~ price + vintage, data=d, ranges=list(cost=10^seq(-1,1)),
+kernel=c("linear", "polynomial", "siogmoid"), tunecontrol = tc)
+```
+
+The optimal cost is 10 and the optimal kernal is radial
+
+Next we graph the SVM optimal plot. We see the number of support vectors is 7655
+```{r}
+#graph the optimal 
+Soptimal = svm( point_bracket ~ price + vintage, data=d, cost=10, kernel="radial" )
+summary(Soptimal); plot(Soptimal,data=d)
+```
+
+Now we look at the accuracy
+```{r}
+attach(wine_train)
+Yhat = predict(Soptimal, data=wine_test[d2,]) #predict using the optimal svm
+table( Yhat, point_bracket)
+svm_accuracy <- mean( Yhat==point_bracket ) 
+```
+
+The accuracy is about .509.
+
+
+```{r, echo=FALSE, warning=FALSE}
+model_results <- bind_rows(model_results,
+                           data_frame(Model="SVM",
+                                      Accuracy = svm_accuracy))
+model_results %>% knitr::kable()
+```
+
+
+SVM accuracy falls at a close second with .509 accuracy 
+
+Overall, our model with the highest accuracy is the Random Forest model and we will proceed to test this model on our testing set.
+
+# 3. RESULTS
+
+We chose this package because it allows for unlimited factor levels 
+
+
+We first optimize a final Random Forest model on the training set utilizing the `Rborist()` function, setting our optimal parameters from the previous cross validation and the number of trees to be 500. 
+
+We have to use this package because we want the final model to be able to fully utlizize all the factor levels if needed. The `Rborist()` function again needs us to use the dummy variables for each of the factor levels.
+
+```{r}
+# Train final random forest model using train_set dummy variables and outcomes with 500 trees
+library(Rborist)
+final_model <- Rborist(x = train_dummyvars,
+                       y = y_train,
+                       nTree = 500, #up the number of trees to 500 to see if we can get better results
+                       predFixed = train_rf$bestTune$predFixed,
+                       minNode = train_rf$bestTune$minNode)
+```
+
+Now we create a matrix of predictors including dummy variables for our testing set and predict our wine points categories for the test set.
+
+```{r}
+# Create a dummy variable matrix of predictors for factor variable levels in the testing set
+dummy_vars <- dummyVars( ~ price + vintage + variety + province, data = wine_test)
+test_dummyvars <- predict(dummy_vars, newdata = wine_test)
+# Create our model predictions for the testing set using the final model
+y_hat <- as.factor(predict(final_model, test_dummyvars)$yPred)
+con_matrix <- confusionMatrix(y_hat, wine_test$point_bracket)
+con_matrix 
+```
+
+```{r}
+#final results
+final_results <- data_frame(Model="Random Forests",
+                           Accuracy = con_matrix$overall['Accuracy'])
+final_results %>% knitr::kable()
+```
+
+Our final results show a 50% accuraccy on the testing set. The sensitivity (true positive rate) or the proportion of positive results out of the number of samples which were actually positive is 0 for the Accebtable and Classic classes (the ones with the least amount of data). But it is over 70% for the excellent class, 38% for Good, 12% for Superb and 47% for very good. The specificity (true negative rate) is the proportion of truly negative cases that were classified as negative; thus, it is a measure of how well your classifier identifies negative cases. This was better across all classes, with the lowest for Excellent at 66%, the most populated class. The detection rate, he number of correct positive class predictions made as a proportion of all of the predictions made. 
+
+#Conclusion 
+
+Finally, we ran a random forest model trained on our training set on the testing set and found a final accuracy value of 50%. This final value is lower than we might have hoped for, where just over half of the time the correct points category is predicted. Ideally, we would want to have an accuracy value of greater than 0.8 or 0.9 in order to have a more useful model.
+
+To improve our model results, we could use a larger sample size for training. This would, of course, greatly increase the computing time needed to train the models, in particular the computationally intense random forest and SVM models. We could also include more variables in our models. The text descriptions may also be able to be used if we explored the text sentiment analysis further and found it to be helpful at scale.
+
+In addition, further machine learning models could be explored which were not tried out in this study, including k-means clustering, neural networks, ridge regression... We would again, however, need to find a sample size to strike a balance between a practical amount of computing time and model accuracy.
+
+
+It could also be useful to have data from the lower score wines to get the full picture.
+
+
+
+
+
